@@ -316,10 +316,16 @@ struct RootView: View {
         } else if url.host() == "voice" {
             detailsOpen = false
             model.voice.open(url)
-            show(.chat)
-            // A link never turns on the microphone: it brings the chat to the front, where the message
-            // field's button starts a talk, and says what Talk with Poki is missing when it has no key.
-            if !model.voice.isOn, !model.voice.canTalkLive { model.voice.keyAsked = true }
+            if model.voice.canTalkLive {
+                show(.chat)
+            } else if model.voice.canTalk {
+                // The existing hold-to-dictate voice page uses the selected chat model
+                // and reads its answer aloud. No OpenAI Realtime credential is needed.
+                show(.voice)
+            } else {
+                show(.chat)
+                model.voice.keyAsked = true
+            }
         } else {
             detailsOpen = false
             show(.chat)
@@ -331,7 +337,14 @@ struct RootView: View {
     /// way to the key in Settings.
     private func openLiveVoice() {
         show(.chat)
-        guard model.voice.canTalkLive else { model.voice.keyAsked = true; return }
+        guard model.voice.canTalkLive else {
+            if model.voice.canTalk {
+                show(.voice)
+            } else {
+                model.voice.keyAsked = true
+            }
+            return
+        }
         if !model.voice.isOn {
             ApprovalNotice.requestPermission()
             Task { await model.voice.start() }
@@ -350,7 +363,13 @@ struct RootView: View {
         show(.chat)
         guard request == .talk, !chat.running, !model.voice.isOn else { return }
         // Without a live voice (no OpenAI key, no voice bridge) Talk opens the message field instead.
-        if model.voice.canTalkLive { openLiveVoice() } else { MessageFieldAsk.shared.ask() }
+        if model.voice.canTalkLive {
+            openLiveVoice()
+        } else if model.voice.canTalk {
+            show(.voice)
+        } else {
+            MessageFieldAsk.shared.ask()
+        }
     }
 
     /// A run from the Activity Log: Poki's own chat or an outside agent's session.

@@ -1,0 +1,71 @@
+name: Poki MiniMax no-OpenAI voice IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-external-iphone:
+    runs-on: macos-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Build on-device PokiLauncher
+        shell: bash
+        run: |
+          set -euo pipefail
+          native/launcher/fetch-idevice.sh
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add aarch64-apple-ios
+          cargo build --release --locked --target aarch64-apple-ios --manifest-path native/launcher/Cargo.toml
+          test -s native/launcher/target/aarch64-apple-ios/release/libpoki_launcher.a
+
+      - name: Build iPhone app with existing dictation and MiniMax model fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          native/ios-app/scripts/make-assets.sh
+          brew install xcodegen
+          xcodegen generate --spec native/ios-app/project-external.yml
+          mkdir -p build out/signing/external
+          if ! xcodebuild build \
+            -project native/ios-app/PokiExternal.xcodeproj \
+            -scheme Poki \
+            -configuration Release \
+            -destination generic/platform=iOS \
+            -derivedDataPath build/app-external \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO ARCHS=arm64 \
+            MARKETING_VERSION=0.4.1 CURRENT_PROJECT_VERSION=1383 \
+            >build/poki-external.log 2>&1; then
+            grep -n -B3 -A5 'error:' build/poki-external.log | head -100 || true
+            exit 1
+          fi
+          APP=build/app-external/Build/Products/Release-iphoneos/Poki.app
+          test -d "$APP"
+          native/ios-app/scripts/package-app.sh "$APP" external \
+            out/Poki-external-0.4.1-1383-minimax-voice-unsigned.ipa 0.4.1 1383
+          python3 native/ios-app/scripts/export-signing.py "$APP" external out/signing/external
+          ditto -c -k --keepParent out/signing out/Poki-signing.zip
+          shasum -a 256 out/*.ipa out/Poki-signing.zip | tee out/SHA256SUMS
+
+      - name: Upload unsigned IPA for existing Windows signing identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: Poki-MiniMax-Voice-iPhone-unsigned
+          path: |
+            out/Poki-external-0.4.1-1383-minimax-voice-unsigned.ipa
+            out/Poki-signing.zip
+            out/SHA256SUMS
+          if-no-files-found: error
