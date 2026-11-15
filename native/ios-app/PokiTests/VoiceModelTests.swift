@@ -91,6 +91,7 @@ final class VoiceModelTests: XCTestCase {
         XCTAssertFalse(VoiceTurnGate.shouldSubmit(candidate: "打开微信", recognized: "打开微信", phase: .thinking))
         XCTAssertFalse(VoiceTurnGate.shouldSubmit(candidate: "打开微信", recognized: "打开微信", phase: .off))
         XCTAssertTrue(VoiceTurnGate.shouldSubmit(candidate: " 打开微信 ", recognized: "打开微信", phase: .hearing))
+        XCTAssertEqual(VoiceModel.dictationPause, .milliseconds(550))
     }
 
     func testDictationLocalePrefersMandarinAndRespectsExplicitChoice() {

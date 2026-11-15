@@ -316,14 +316,8 @@ struct RootView: View {
         } else if url.host() == "voice" {
             detailsOpen = false
             model.voice.open(url)
-            if model.voice.canTalkLive {
-                show(.chat)
-            } else if model.voice.canTalk {
-                // The existing hold-to-dictate voice page uses the selected chat model
-                // and reads its answer aloud. No OpenAI Realtime credential is needed.
-                show(.voice)
-            } else {
-                show(.chat)
+            show(.chat)
+            if !model.voice.canTalk {
                 model.voice.keyAsked = true
             }
         } else {
@@ -337,12 +331,8 @@ struct RootView: View {
     /// way to the key in Settings.
     private func openLiveVoice() {
         show(.chat)
-        guard model.voice.canTalkLive else {
-            if model.voice.canTalk {
-                show(.voice)
-            } else {
-                model.voice.keyAsked = true
-            }
+        guard model.voice.canTalk else {
+            model.voice.keyAsked = true
             return
         }
         if !model.voice.isOn {
@@ -362,11 +352,10 @@ struct RootView: View {
         if let handoff = AskPoki.liveSessionID { show(.session(handoff)); return }
         show(.chat)
         guard request == .talk, !chat.running, !model.voice.isOn else { return }
-        // Without a live voice (no OpenAI key, no voice bridge) Talk opens the message field instead.
-        if model.voice.canTalkLive {
+        // All available voice routes share the chat's inline TalkBar. MiniMax
+        // uses continuous on-device recognition; no separate voice page.
+        if model.voice.canTalk {
             openLiveVoice()
-        } else if model.voice.canTalk {
-            show(.voice)
         } else {
             MessageFieldAsk.shared.ask()
         }

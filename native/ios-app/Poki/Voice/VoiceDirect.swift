@@ -94,6 +94,7 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
     private var recognition: SFSpeechRecognitionTask?
     private let speaker = AVSpeechSynthesizer()
     private(set) var heard = ""
+    private var recognitionFinal = false
     var onHeard: ((String) -> Void)?
     var onFinal: (() -> Void)?
     var onSpoken: (() -> Void)?
@@ -102,8 +103,10 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
     /// bilingual users choose the language they are speaking without changing the whole phone.
     static func recognitionLocale(preferredLanguages: [String] = Locale.preferredLanguages,
                                   selection: String? = UserDefaults.standard.string(forKey: "pokiDictationLocale")) -> Locale {
+        let appLanguage = UserDefaults.standard.string(forKey: AppLocalization.key)
+            .flatMap { $0 == AppLocalization.system ? nil : $0 }
         let chosen = selection.flatMap { $0.isEmpty || $0 == "auto" ? nil : $0 }
-            ?? preferredLanguages.first ?? Locale.current.identifier
+            ?? appLanguage ?? preferredLanguages.first ?? Locale.current.identifier
         let language = chosen.lowercased()
         if language.hasPrefix("zh-hant") || language.hasPrefix("zh-tw") || language.hasPrefix("zh-hk") {
             return Locale(identifier: "zh-TW")
@@ -126,6 +129,7 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
     func listen() throws {
         speaker.stopSpeaking(at: .immediate)
         heard = ""
+        recognitionFinal = false
         let recognizer = SFSpeechRecognizer(locale: Self.recognitionLocale())
         guard let recognizer, recognizer.isAvailable else { throw VoiceError.realtime(0, AppLocalization.text(LocalizedStringResource("Speech recognition is not available right now."))) }
         let audio = AVAudioSession.sharedInstance()
@@ -134,7 +138,8 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.taskHint = .dictation
-        request.contextualStrings = ["Poki", "MiniMax", "iCTRL", "SideStore", "微信", "备忘录", "快捷指令"]
+        request.contextualStrings = ["Poki", "MiniMax", "iCTRL", "SideStore", "微信", "微信聊天", "备忘录", "快捷指令", "支付宝", "淘宝", "抖音", "小红书", "设置", "Safari", "截图", "返回", "发送", "打开", "点击"]
+        request.addsPunctuation = true
         // Allow the system to select its best available recognizer rather than forcing the older
         // on-device SFSpeechRecognizer model; SpeechAnalyzer can replace this fallback separately.
         request.requiresOnDeviceRecognition = false
@@ -147,7 +152,10 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
         recognition = Self.recognize(recognizer, request) { [weak self] text, final in
             self?.heard = text
             self?.onHeard?(text)
-            if final { self?.onFinal?() }
+            if final {
+                self?.recognitionFinal = true
+                self?.onFinal?()
+            }
         }
     }
 
@@ -166,12 +174,17 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    /// Stops listening; the words heard so far (a moment later, for the last ones).
+    /// Stops listening and gives the recognizer a bounded time to finalize the
+    /// last phoneme. Previously this unconditional wait was 600 ms per turn.
     func finish() async -> String {
         request?.endAudio()
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
-        try? await Task.sleep(for: .milliseconds(600))
+        // A genuine final result returns immediately. In the absence of one,
+        // wait for at most 280 ms and commit the best streaming partial.
+        for _ in 0..<7 where !recognitionFinal && !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(40))
+        }
         recognition?.cancel()
         recognition = nil
         request = nil

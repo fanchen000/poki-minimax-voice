@@ -430,7 +430,11 @@ final class VoiceModel {
     /// A new partial transcription moves the endpoint. Only a quiet, stable utterance is submitted.
     /// Cancelling this task on Stop avoids a late automatic phone action after the user has ended voice.
     private var dictationEndpoint: Task<Void, Never>?
-    static let dictationPause: Duration = .milliseconds(1250)
+    /// The previous 1.25 s text-stability wait plus 0.6 s ASR flushing made
+    /// MiniMax start almost two seconds after the owner finished speaking.
+    /// Speech recognition already streams partials; every new partial resets
+    /// this timer, and the final recognition result commits immediately.
+    static let dictationPause: Duration = .milliseconds(550)
 
     func setBridge(_ text: String) -> Bool {
         guard let bridge = VoiceBridge(text) else { return false }
@@ -698,6 +702,7 @@ final class VoiceModel {
         dictationEndpoint = nil
         phase = .thinking
         Task {
+            let finishingStarted = Date()
             let text = await dictation.finish()
             guard self.dictation === dictation, self.phase == .thinking else { return }
             if lines.last?.role == .you, lines.last?.text != text { lines.removeLast() }
@@ -710,6 +715,7 @@ final class VoiceModel {
                 return
             }
             let before = chat.entries.count
+            log.add("voice", "dictation to model dispatch after finalization in \(Int(Date().timeIntervalSince(finishingStarted) * 1000)) ms")
             chat.send(text)
             while chat.running {
                 try? await Task.sleep(for: .milliseconds(200))
