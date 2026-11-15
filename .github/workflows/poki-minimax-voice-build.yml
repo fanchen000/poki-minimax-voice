@@ -1,4 +1,4 @@
-name: Poki MiniMax inline low-latency voice IPA
+name: Poki MiniMax on-demand automation and hands-free voice IPA
 
 on:
   push:
@@ -49,7 +49,7 @@ jobs:
             -destination generic/platform=iOS \
             -derivedDataPath build/app-external \
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO ARCHS=arm64 \
-            MARKETING_VERSION=0.4.1 CURRENT_PROJECT_VERSION=1386 \
+            MARKETING_VERSION=0.4.2 CURRENT_PROJECT_VERSION=1516 \
             >build/poki-external.log 2>&1; then
             grep -n -B3 -A5 'error:' build/poki-external.log | head -100 || true
             exit 1
@@ -57,7 +57,7 @@ jobs:
           APP=build/app-external/Build/Products/Release-iphoneos/Poki.app
           test -d "$APP"
           native/ios-app/scripts/package-app.sh "$APP" external \
-            out/Poki-external-0.4.1-1386-fast-navigation-unsigned.ipa 0.4.1 1386
+            out/Poki-external-0.4.2-1516-on-demand-minimax-unsigned.ipa 0.4.2 1516
           python3 native/ios-app/scripts/export-signing.py "$APP" external out/signing/external
           ditto -c -k --keepParent out/signing out/Poki-signing.zip
           shasum -a 256 out/*.ipa out/Poki-signing.zip | tee out/SHA256SUMS
@@ -65,9 +65,9 @@ jobs:
       - name: Upload unsigned IPA for existing Windows signing identity
         uses: actions/upload-artifact@v4
         with:
-          name: Poki-MiniMax-1386-Voice-iPhone-unsigned
+          name: Poki-MiniMax-1516-OnDemand-Voice-iPhone-unsigned
           path: |
-            out/Poki-external-0.4.1-1386-fast-navigation-unsigned.ipa
+            out/Poki-external-0.4.2-1516-on-demand-minimax-unsigned.ipa
             out/Poki-signing.zip
             out/SHA256SUMS
           if-no-files-found: error
