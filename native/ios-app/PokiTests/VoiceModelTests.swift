@@ -105,6 +105,16 @@ final class VoiceModelTests: XCTestCase {
                        Locale(identifier: "ja-JP").identifier)
     }
 
+    func testImmediateNavigationIsExactAndDoesNotInterpretComplexCommands() {
+        XCTAssertEqual(VoiceQuickAction.match("打开微信。")?.actions.first?["launch"], "com.tencent.xin")
+        XCTAssertEqual(VoiceQuickAction.match("打开Safari")?.actions.first?["launch"], "com.apple.mobilesafari")
+        XCTAssertEqual(VoiceQuickAction.match("回到桌面")?.actions.first?["button"], "home")
+        XCTAssertNil(VoiceQuickAction.match("打开微信给张三发消息"))
+        XCTAssertNil(VoiceQuickAction.match("打开设置然后打开蓝牙"))
+        XCTAssertNil(VoiceQuickAction.match("删除全部消息"))
+        XCTAssertTrue(VoiceQuickAction.match("返回")?.toolArguments?.contains("\"back\":true") == true)
+    }
+
     override func setUp() {
         savedBridge = UserDefaults.standard.string(forKey: "voiceBridge")
         savedDirect = UserDefaults.standard.object(forKey: "voice.openai.enabled")

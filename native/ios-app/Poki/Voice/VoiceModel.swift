@@ -714,6 +714,20 @@ final class VoiceModel {
                 listenAgain(dictation)
                 return
             }
+            // Exact reversible navigation goes straight to PokiCore, without
+            // waiting for a full MiniMax tool-calling round trip. Everything
+            // else retains the general goal-driven model/tool pipeline.
+            if let immediate = VoiceQuickAction.match(text),
+               let arguments = immediate.toolArguments {
+                log.add("voice", "immediate navigation routed without model: \(Int(Date().timeIntervalSince(finishingStarted) * 1000)) ms since finalization began")
+                let (_, failed) = await phoneTool("do", arguments)
+                guard self.dictation === dictation, self.phase == .thinking else { return }
+                let answer = failed ? AppLocalization.text(LocalizedStringResource("The phone action did not finish.")) : immediate.response
+                lines.append(VoiceLine(role: .poki, text: answer))
+                phase = .speaking
+                dictation.speak(answer)
+                return
+            }
             let before = chat.entries.count
             log.add("voice", "dictation to model dispatch after finalization in \(Int(Date().timeIntervalSince(finishingStarted) * 1000)) ms")
             chat.send(text)
