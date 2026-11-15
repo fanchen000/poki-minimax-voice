@@ -1,10 +1,8 @@
 import SwiftUI
 
 /// The voice page (ESP-171 boards "V Voice ready", "V Voice listening", "V Voice working with Island"):
-/// one big line in the middle and the hold button at the bottom, on Poki's blue. It runs on VoiceModel
-/// and VoiceDirect (the Realtime voice conversation or on-device dictation): holding the button starts the
-/// conversation and Poki hears you; letting go leaves the turn to the model, which knows when you stopped;
-/// sliding up ends it.
+/// one big line in the middle and a tap-to-toggle voice button. Once started, voice detection
+/// ends each utterance automatically; the phone's actions and the next listening turn are continuous.
 struct VoicePage: View {
     @Environment(AppModel.self) private var model
     var back: (() -> Void)? = nil
@@ -12,9 +10,6 @@ struct VoicePage: View {
     /// Accounts and Models: voice needs a chat model to dictate, or an OpenAI key to talk live.
     var openModel: () -> Void
     var select: (RootPage) -> Void
-    @State private var holding = false
-    @State private var cancelling = false
-
     private var voice: VoiceModel { model.voice }
 
     enum Face { case ready, listening, working }
@@ -24,18 +19,23 @@ struct VoicePage: View {
         VStack(spacing: 0) {
             MessageListHeader(dark: true, back: back, openDetails: openDetails)
             stage(face).frame(maxHeight: .infinity)
-            HoldButton(listening: face == .listening, hint: hint(face))
-                .gesture(hold)
+            Button(action: toggleVoice) {
+                HoldButton(listening: face == .listening, hint: hint(face), active: voice.isOn)
+            }
+                .buttonStyle(.plain)
                 .padding(.bottom, 22)
             ModeLabels(page: .voice, dark: true, select: select)
         }
         .background((face == .listening ? Color(hex: 0x123A9C) : Site.blue).ignoresSafeArea())
         .animation(.snappy, value: face)
+        .task {
+            if voice.canTalk && !voice.isOn { await voice.start() }
+        }
     }
 
     private var currentFace: Face {
-        if holding || voice.phase == .hearing { return .listening }
-        if voice.isOn && (voice.phase == .thinking || !model.approvals.isEmpty) { return .working }
+        if voice.isOn && (voice.phase == .listening || voice.phase == .hearing || voice.phase == .connecting) { return .listening }
+        if voice.isOn && (voice.phase == .thinking || voice.phase == .speaking || !model.approvals.isEmpty) { return .working }
         return .ready
     }
 
@@ -45,7 +45,7 @@ struct VoicePage: View {
         VStack(spacing: 14) {
             switch face {
             case .ready:
-                Text("Hold and say it.").font(.system(size: 34, weight: .bold)).foregroundStyle(.white)
+                Text("Talk to Poki.").font(.system(size: 34, weight: .bold)).foregroundStyle(.white)
                 Text(readyLine).font(.system(size: 17)).foregroundStyle(.white.opacity(0.72)).multilineTextAlignment(.center)
                     .onTapGesture { if !voice.canTalk { openModel() } }
             case .listening:
@@ -110,29 +110,17 @@ struct VoicePage: View {
 
     private func hint(_ face: Face) -> LocalizedStringKey {
         switch face {
-        case .ready: voice.isOn ? "Hold to talk, slide up to end" : "Hold to Talk"
-        case .listening: cancelling ? "Release to end the conversation." : "Release to send. Slide up to cancel."
-        case .working: "Hold to add something"
+        case .ready: "Tap to start listening"
+        case .listening: "Listening automatically · Tap to end"
+        case .working: "Poki is working · Tap to end"
         }
     }
 
-    // MARK: Holding
-
-    private var hold: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if !holding {
-                    holding = true
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    if voice.canTalk { Task { await voice.press() } } else { openModel() }
-                }
-                cancelling = value.translation.height < -60
-            }
-            .onEnded { _ in
-                if cancelling { voice.stop() } else { voice.released() }
-                holding = false
-                cancelling = false
-            }
+    private func toggleVoice() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if voice.isOn { voice.stop() }
+        else if voice.canTalk { Task { await voice.start() } }
+        else { openModel() }
     }
 
     // MARK: Screenshots
@@ -151,6 +139,7 @@ struct VoicePage: View {
 private struct HoldButton: View {
     var listening: Bool
     var hint: LocalizedStringKey
+    var active: Bool
 
     var body: some View {
         VStack(spacing: 12) {
@@ -169,7 +158,7 @@ private struct HoldButton: View {
             .frame(width: 200, height: 200)
             .contentShape(.circle)
             .accessibilityElement()
-            .accessibilityLabel(Text("Hold to Talk"))
+            .accessibilityLabel(Text(active ? "End Voice" : "Start Voice"))
             .accessibilityAddTraits(.isButton)
             Text(hint).font(.system(size: 13)).foregroundStyle(.white.opacity(0.84))
         }

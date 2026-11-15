@@ -7,9 +7,8 @@ import Speech
 /// - With the owner's OpenAI API key on this iPhone, Poki asks OpenAI for a one-minute Realtime key
 ///   itself (what `bin/voice-bridge.mjs` does on the Mac: the same model, instructions and tools), and
 ///   look and do run here, through PokiCore, as with the bridge's phone tools.
-/// - With any other model (a ChatGPT plan, Anthropic, OpenRouter…), whose sign-in has no Realtime
-///   audio, holding the button dictates on this iPhone (Apple's speech recognition, on the device when
-///   it can) and lets go to send it to Poki's chat; Poki reads the answer out loud.
+/// - With any other model (including MiniMax), Poki continuously transcribes the microphone, detects
+///   the end of each utterance, sends that command to the existing chat/tools and listens again.
 enum VoiceDirect {
     /// The live voice model the owner picked (Accounts › OpenAI › Live Voice), GPT Realtime 2.1 by default.
     static var model: String { ModelCatalog.voiceModel }
@@ -87,7 +86,7 @@ enum VoiceDirect {
     }
 }
 
-/// Hold to dictate, let go to send to Poki's chat, hear the answer: voice for models without Realtime.
+/// Streaming iOS recognition for models without a Realtime speech endpoint.
 @MainActor
 final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
     private let engine = AVAudioEngine()
@@ -96,7 +95,22 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
     private let speaker = AVSpeechSynthesizer()
     private(set) var heard = ""
     var onHeard: ((String) -> Void)?
+    var onFinal: (() -> Void)?
     var onSpoken: (() -> Void)?
+
+    /// Make Mandarin explicit when the device is set to Chinese. The manual preference also lets
+    /// bilingual users choose the language they are speaking without changing the whole phone.
+    static func recognitionLocale(preferredLanguages: [String] = Locale.preferredLanguages,
+                                  selection: String? = UserDefaults.standard.string(forKey: "pokiDictationLocale")) -> Locale {
+        let chosen = selection.flatMap { $0.isEmpty || $0 == "auto" ? nil : $0 }
+            ?? preferredLanguages.first ?? Locale.current.identifier
+        let language = chosen.lowercased()
+        if language.hasPrefix("zh-hant") || language.hasPrefix("zh-tw") || language.hasPrefix("zh-hk") {
+            return Locale(identifier: "zh-TW")
+        }
+        if language.hasPrefix("zh") { return Locale(identifier: "zh-CN") }
+        return Locale(identifier: chosen)
+    }
 
     override init() {
         super.init()
@@ -112,22 +126,28 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
     func listen() throws {
         speaker.stopSpeaking(at: .immediate)
         heard = ""
-        guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else { throw VoiceError.realtime(0, AppLocalization.text(LocalizedStringResource("Speech recognition is not available right now."))) }
+        let recognizer = SFSpeechRecognizer(locale: Self.recognitionLocale())
+        guard let recognizer, recognizer.isAvailable else { throw VoiceError.realtime(0, AppLocalization.text(LocalizedStringResource("Speech recognition is not available right now."))) }
         let audio = AVAudioSession.sharedInstance()
         try audio.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
         try audio.setActive(true)
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        request.taskHint = .dictation
+        request.contextualStrings = ["Poki", "MiniMax", "iCTRL", "SideStore", "微信", "备忘录", "快捷指令"]
+        // Allow the system to select its best available recognizer rather than forcing the older
+        // on-device SFSpeechRecognizer model; SpeechAnalyzer can replace this fallback separately.
+        request.requiresOnDeviceRecognition = false
         self.request = request
         let input = engine.inputNode
         input.removeTap(onBus: 0)
         Self.tap(input, into: request)
         engine.prepare()
         try engine.start()
-        recognition = Self.recognize(recognizer, request) { [weak self] text in
+        recognition = Self.recognize(recognizer, request) { [weak self] text, final in
             self?.heard = text
             self?.onHeard?(text)
+            if final { self?.onFinal?() }
         }
     }
 
@@ -138,10 +158,11 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     nonisolated private static func recognize(_ recognizer: SFSpeechRecognizer, _ request: SFSpeechAudioBufferRecognitionRequest,
-                                              heard: @escaping @MainActor (String) -> Void) -> SFSpeechRecognitionTask {
+                                              heard: @escaping @MainActor (String, Bool) -> Void) -> SFSpeechRecognitionTask {
         recognizer.recognitionTask(with: request) { result, _ in
             guard let text = result?.bestTranscription.formattedString else { return }
-            Task { @MainActor in heard(text) }
+            let final = result?.isFinal ?? false
+            Task { @MainActor in heard(text, final) }
         }
     }
 
@@ -159,7 +180,8 @@ final class Dictation: NSObject, AVSpeechSynthesizerDelegate {
 
     func speak(_ text: String) {
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
+        let containsHan = text.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) }
+        utterance.voice = AVSpeechSynthesisVoice(language: containsHan ? "zh-CN" : (Locale.preferredLanguages.first ?? "en-US"))
         speaker.speak(utterance)
     }
 

@@ -227,6 +227,15 @@ enum VoicePhase: Equatable {
     }
 }
 
+/// A late recognizer callback or a cancelled silence timer must never dispatch a second phone task.
+struct VoiceTurnGate {
+    static func shouldSubmit(candidate: String, recognized: String, phase: VoicePhase) -> Bool {
+        let intended = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        return phase == .hearing && !intended.isEmpty &&
+            intended == recognized.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// The time VoiceModel reads and waits on.
 struct VoiceClock {
     var now: @MainActor () -> Date = { Date() }
@@ -418,6 +427,10 @@ final class VoiceModel {
     }
 
     private var dictation: Dictation?
+    /// A new partial transcription moves the endpoint. Only a quiet, stable utterance is submitted.
+    /// Cancelling this task on Stop avoids a late automatic phone action after the user has ended voice.
+    private var dictationEndpoint: Task<Void, Never>?
+    static let dictationPause: Duration = .milliseconds(1250)
 
     func setBridge(_ text: String) -> Bool {
         guard let bridge = VoiceBridge(text) else { return false }
@@ -550,6 +563,8 @@ final class VoiceModel {
 
     /// Ends the conversation. Calls already running keep running; the next session hears how they ended.
     func stop() {
+        dictationEndpoint?.cancel()
+        dictationEndpoint = nil
         if let dictation {
             dictation.stopSpeaking()
             Task { _ = await dictation.finish() }
@@ -666,7 +681,7 @@ final class VoiceModel {
 
     // MARK: Dictation
 
-    /// The button pressed: starts the conversation, or (dictating) listens for the next request.
+    /// Legacy entry action. The voice page now starts a persistent session with a single tap.
     func press() async {
         if let dictation {
             guard phase != .hearing, phase != .thinking else { return }
@@ -676,38 +691,86 @@ final class VoiceModel {
         if !isOn, canTalk { await start() }
     }
 
-    /// The button let go. Realtime knows by itself when you stopped; dictation sends what it heard.
+    /// Commit one automatically detected utterance; called by the quiet-period detector or a final ASR result.
     func released() {
         guard let dictation, phase == .hearing else { return }
+        dictationEndpoint?.cancel()
+        dictationEndpoint = nil
         phase = .thinking
         Task {
             let text = await dictation.finish()
+            guard self.dictation === dictation, self.phase == .thinking else { return }
             if lines.last?.role == .you, lines.last?.text != text { lines.removeLast() }
-            guard !text.isEmpty else { phase = .listening; return }
+            guard !text.isEmpty else { listenAgain(dictation); return }
             if lines.last?.text != text { lines.append(VoiceLine(role: .you, text: text)) }
             guard let chat = AskPoki.chat else { phase = .lost(VoiceError.noBridge.words); return }
-            if chat.running { lines.append(VoiceLine(role: .note, text: AppLocalization.text(LocalizedStringResource("Poki is still on the last task.")))); phase = .listening; return }
+            if chat.running {
+                lines.append(VoiceLine(role: .note, text: AppLocalization.text(LocalizedStringResource("Poki is still on the last task."))))
+                listenAgain(dictation)
+                return
+            }
             let before = chat.entries.count
             chat.send(text)
-            while chat.running { try? await Task.sleep(for: .milliseconds(200)) }
+            while chat.running {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard self.dictation === dictation, self.phase == .thinking else { return }
+            }
+            guard self.dictation === dictation, self.phase == .thinking else { return }
             let reply = chat.entries.dropFirst(before).compactMap { entry -> String? in if case .poki(let t) = entry.kind { return t }; return nil }.last
-                ?? AppLocalization.text(LocalizedStringResource("Done."))
+                ?? AppLocalization.text(LocalizedStringResource("Poki did not return an answer."))
             lines.append(VoiceLine(role: .poki, text: reply))
-            guard self.dictation === dictation else { return }
             phase = .speaking
             dictation.speak(reply.replacingOccurrences(of: "**", with: ""))
+        }
+    }
+
+    /// Keep the microphone hands-free across successive MiniMax turns. While the model and phone
+    /// tools run, the recognizer is stopped, so Poki's own spoken answer cannot become a new command.
+    private func listenAgain(_ dictation: Dictation) {
+        guard self.dictation === dictation else { return }
+        dictationEndpoint?.cancel()
+        dictationEndpoint = nil
+        do {
+            try dictation.listen()
+            phase = .hearing
+        } catch {
+            self.dictation = nil
+            holdingMicrophone = false
+            phase = .lost(VoiceError.reason(for: error))
+        }
+    }
+
+    /// Debounce partial text changes, instead of requiring the user to hold or release a control.
+    private func endWhenQuiet(_ text: String, using dictation: Dictation) {
+        dictationEndpoint?.cancel()
+        let candidate = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else { dictationEndpoint = nil; return }
+        dictationEndpoint = Task { [weak self, weak dictation] in
+            try? await Task.sleep(for: Self.dictationPause)
+            guard !Task.isCancelled, let self, let dictation,
+                  self.dictation === dictation,
+                  VoiceTurnGate.shouldSubmit(candidate: candidate, recognized: dictation.heard, phase: self.phase) else { return }
+            self.released()
         }
     }
 
     private func startDictation() async {
         guard await Dictation.allowed() else { phase = .lost(AppLocalization.text(LocalizedStringResource("Poki needs the microphone and speech recognition: allow them in Settings › Poki."))); return }
         let dictation = Dictation()
-        dictation.onHeard = { [weak self] text in
-            guard let self, self.phase == .hearing else { return }
+        dictation.onHeard = { [weak self, weak dictation] text in
+            guard let self, let dictation, self.dictation === dictation, self.phase == .hearing else { return }
             if self.lines.last?.role == .you { self.lines.removeLast() }
             self.lines.append(VoiceLine(role: .you, text: text))
+            self.endWhenQuiet(text, using: dictation)
         }
-        dictation.onSpoken = { [weak self] in if self?.phase == .speaking { self?.phase = .listening } }
+        dictation.onFinal = { [weak self, weak dictation] in
+            guard let self, let dictation, self.dictation === dictation, self.phase == .hearing else { return }
+            self.released()
+        }
+        dictation.onSpoken = { [weak self, weak dictation] in
+            guard let self, let dictation, self.dictation === dictation, self.phase == .speaking else { return }
+            self.listenAgain(dictation)
+        }
         self.dictation = dictation
         holdingMicrophone = true
         do {
@@ -723,7 +786,11 @@ final class VoiceModel {
 
     /// Stops Poki's voice reply. Anything running on the phone keeps running.
     func stopTalking() {
-        if let dictation { dictation.stopSpeaking(); if phase == .speaking { phase = .listening }; return }
+        if let dictation {
+            dictation.stopSpeaking()
+            if phase == .speaking { listenAgain(dictation) }
+            return
+        }
         guard let link else { return }
         if phase == .speaking { markInterrupted() }
         if activeResponse != nil { link.send(["type": "response.cancel"]) }

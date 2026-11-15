@@ -85,6 +85,25 @@ final class VoiceModelTests: XCTestCase {
     private var savedBridge: String?
     private var savedDirect: Any?
 
+    func testHandsFreeTurnGateIgnoresSilenceChangesAndLateResults() {
+        XCTAssertFalse(VoiceTurnGate.shouldSubmit(candidate: "", recognized: "", phase: .hearing))
+        XCTAssertFalse(VoiceTurnGate.shouldSubmit(candidate: "打开微信", recognized: "打开微信里的消息", phase: .hearing))
+        XCTAssertFalse(VoiceTurnGate.shouldSubmit(candidate: "打开微信", recognized: "打开微信", phase: .thinking))
+        XCTAssertFalse(VoiceTurnGate.shouldSubmit(candidate: "打开微信", recognized: "打开微信", phase: .off))
+        XCTAssertTrue(VoiceTurnGate.shouldSubmit(candidate: " 打开微信 ", recognized: "打开微信", phase: .hearing))
+    }
+
+    func testDictationLocalePrefersMandarinAndRespectsExplicitChoice() {
+        XCTAssertEqual(Dictation.recognitionLocale(preferredLanguages: ["zh-Hans-CN"], selection: "auto").identifier,
+                       Locale(identifier: "zh-CN").identifier)
+        XCTAssertEqual(Dictation.recognitionLocale(preferredLanguages: ["zh-Hant-HK"], selection: "auto").identifier,
+                       Locale(identifier: "zh-TW").identifier)
+        XCTAssertEqual(Dictation.recognitionLocale(preferredLanguages: ["ja-JP"], selection: "zh-CN").identifier,
+                       Locale(identifier: "zh-CN").identifier)
+        XCTAssertEqual(Dictation.recognitionLocale(preferredLanguages: ["ja-JP"], selection: "auto").identifier,
+                       Locale(identifier: "ja-JP").identifier)
+    }
+
     override func setUp() {
         savedBridge = UserDefaults.standard.string(forKey: "voiceBridge")
         savedDirect = UserDefaults.standard.object(forKey: "voice.openai.enabled")
