@@ -333,6 +333,11 @@ final class AppModel {
                            connection: VoiceModel.connection)
         self.launcher = launcher
         self.pairer = pairer
+        voice.setPhoneTool { [weak self] name, arguments in
+            guard let self else { return ("not_sent: Poki is no longer running", true) }
+            let result = await self.runTool(name, arguments: arguments)
+            return (result.text, result.isError)
+        }
         // inFront starts true before the first scene callback, including a background launch.
         self.activity.canStart = { [weak self] in self?.inFront == true && UIApplication.shared.applicationState == .active }
         host.update(key: identity.signingKey, hashes: identity.accessHashes)

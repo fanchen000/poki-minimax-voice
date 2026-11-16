@@ -121,7 +121,7 @@ struct ChatView: View {
             }
             // The home page stays in the tree while the conversation is in front, neither seen nor
             // touched, so a new conversation brings it back on the same animation.
-            HomePage(home: home, writing: writing, rise: flightRise, pick: { model.prepareForTask(); draft.wrappedValue = $0; writing = true }) {
+            HomePage(home: home, writing: writing, rise: flightRise, pick: { draft.wrappedValue = $0; writing = true }) {
                 if home, let update { UpdatePill(version: update, open: openUpdates) }
                 if home, let hint = homeHint {
                     SetupHintLine(hint: hint, openSetupStep: openSetupStep, openSetup: openSetup, openModel: openModel,
@@ -174,7 +174,6 @@ struct ChatView: View {
         }
         // The bear says hi as a talk begins.
         .onChange(of: voice.isOn) { _, on in if on { pokes += 1 } }
-        .onChange(of: writing) { _, focused in if focused { model.prepareForTask() } }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { pageHeight = $0 }
         .animation(.snappy, value: voice.isOn)
         .animation(.snappy, value: model.approvals.first?.id)
@@ -1632,7 +1631,6 @@ final class FieldDictation {
 
     func start(_ model: AppModel, after current: String) {
         guard !on, !starting else { return }
-        model.prepareForTask()
         starting = true
         problem = nil
         let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)

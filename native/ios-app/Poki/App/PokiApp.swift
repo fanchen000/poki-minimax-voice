@@ -355,7 +355,6 @@ struct RootView: View {
         }
         if !model.voice.isOn {
             ApprovalNotice.requestPermission()
-            model.prepareForTask()
             Task { await model.voice.start() }
         }
     }

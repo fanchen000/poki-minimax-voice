@@ -314,7 +314,7 @@ final class VoiceModel {
     static let approvalWait: Double = 115
 
     /// look and do, run by PokiCore on this phone (the relay's tools): name, JSON arguments → text, failed.
-    private let phoneTool: @MainActor (String, String) async -> (String, Bool)
+    private var phoneTool: @MainActor (String, String) async -> (String, Bool)
 
     /// true while a conversation with the microphone is on: Poki's silent keep-alive audio steps aside
     /// (its .playback session cannot record), and the voice-chat session keeps Poki running instead.
@@ -351,6 +351,13 @@ final class VoiceModel {
         NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.inBackground = false }
         }
+    }
+
+    /// The AppModel installs its task-gated tool after its own initialization.
+    /// Listening and ordinary conversation therefore never start automation;
+    /// the first actual look/do uses AppModel.runTool to wake it on demand.
+    func setPhoneTool(_ tool: @escaping @MainActor (String, String) async -> (String, Bool)) {
+        phoneTool = tool
     }
     private var holdingMicrophone = false {
         didSet { if holdingMicrophone != oldValue { holdMicrophone(holdingMicrophone) } }
